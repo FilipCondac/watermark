@@ -43,17 +43,26 @@ HOMEBREW_CASK_OPTS="--appdir=~/Applications" brew install --cask filipcondac/tap
 ### Manual download
 
 Grab `WaterMark.zip` from the [latest release](https://github.com/FilipCondac/watermark/releases/latest),
-unzip, and move `WaterMark.app` to `/Applications`. Because it isn't notarized
-(no paid Apple Developer account), clear the quarantine flag once:
+unzip, and drag `WaterMark.app` to your Applications folder (`~/Applications`
+works without admin rights).
 
-```bash
-xattr -dr com.apple.quarantine /Applications/WaterMark.app
-open /Applications/WaterMark.app
-```
+Because it isn't notarized (no paid Apple Developer account), macOS blocks the
+**first** launch. Clear it once, either way:
 
-> The app **is** code-signed (ad-hoc), so it runs fine on Apple Silicon — the
-> quarantine step just skips the "unidentified developer" prompt that
-> un-notarized apps trigger.
+- **No Terminal:** double-click the app, dismiss the warning, then open
+  **System Settings → Privacy & Security**, scroll down, and click
+  **"Open Anyway"** next to WaterMark. (On macOS 15+ the old right-click → Open
+  trick no longer bypasses this.)
+- **Terminal:** clear the quarantine flag directly —
+
+  ```bash
+  xattr -dr com.apple.quarantine ~/Applications/WaterMark.app
+  open ~/Applications/WaterMark.app
+  ```
+
+> The app **is** code-signed (ad-hoc), so it runs fine on Apple Silicon — these
+> steps just clear the one-time "unidentified developer" prompt that
+> un-notarized apps trigger. The `brew install` route avoids this entirely.
 
 ## Build from source
 
