@@ -1,0 +1,71 @@
+name: Release
+
+# Tag a commit (e.g. `git tag v1.0.1 && git push --tags`) to build the app,
+# publish a GitHub Release with WaterMark.zip, and bump the Homebrew cask.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build app bundle
+        run: ./build_app.sh
+
+      - name: Package + checksum
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent WaterMark.app WaterMark.zip
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "SHA=$(shasum -a 256 WaterMark.zip | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: WaterMark.zip
+          generate_release_notes: true
+
+      # Optional: auto-update the Homebrew tap. Requires a fine-grained PAT
+      # (secret TAP_GITHUB_TOKEN) with Contents: read/write on FilipCondac/homebrew-tap.
+      # If the secret is absent, this step is skipped and you can bump the cask by hand.
+      - name: Update Homebrew cask
+        if: ${{ env.TAP_TOKEN != '' }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/FilipCondac/homebrew-tap.git" tap
+          cat > tap/Casks/watermark.rb <<EOF
+          cask "watermark" do
+            version "${VERSION}"
+            sha256 "${SHA}"
+
+            url "https://github.com/FilipCondac/watermark/releases/download/v#{version}/WaterMark.zip"
+            name "WaterMark"
+            desc "Menu-bar estimate of Claude Code water usage"
+            homepage "https://github.com/FilipCondac/watermark"
+
+            app "WaterMark.app"
+
+            postflight do
+              system_command "/usr/bin/xattr",
+                             args: ["-dr", "com.apple.quarantine", "#{appdir}/WaterMark.app"]
+            end
+
+            zap trash: [
+              "~/Library/Preferences/com.filipcondac.watermark.plist",
+            ]
+          end
+          EOF
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/watermark.rb
+          git commit -m "watermark ${VERSION}" || exit 0
+          git push
