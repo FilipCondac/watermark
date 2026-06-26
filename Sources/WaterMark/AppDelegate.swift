@@ -1,6 +1,20 @@
 import AppKit
 import ServiceManagement
 
+/// Which usage window the menu-bar figure reflects.
+enum BarWindow: String, CaseIterable {
+    case today, week, month, all
+
+    var title: String {
+        switch self {
+        case .today: return "Today"
+        case .week:  return "Last 7 days"
+        case .month: return "Last 30 days"
+        case .all:   return "All time"
+        }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -9,6 +23,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let scanQueue = DispatchQueue(label: "com.filipcondac.watermark.scan")
     private var timer: Timer?
     private var latest = UsageAggregate()
+
+    /// Per-model rate presets offered in the menu (mL / 1k tokens).
+    private let ratePresets: [Double] = [0.1, 0.25, 0.5, 1.0, 2.0]
+
+    /// Window shown in the menu bar (persisted).
+    private var barWindow: BarWindow {
+        get { BarWindow(rawValue: UserDefaults.standard.string(forKey: "barWindow") ?? "") ?? .today }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "barWindow") }
+    }
+
+    /// Carried on a menu item so an action knows which model + rate to apply.
+    private struct RateChange { let model: String; let rate: Double }
 
     private static let tokenFmt: NumberFormatter = {
         let f = NumberFormatter()
@@ -45,75 +71,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func windowTotals() -> (today: TokenTotals, last7: TokenTotals, all: TokenTotals) {
+    /// Per-model token totals over a set of day keys (nil = all time).
+    private func tokens(forDays days: [String]?) -> [String: TokenTotals] {
+        var out: [String: TokenTotals] = [:]
+        let filter = days.map(Set.init)
+        for (day, models) in latest.byDayModel {
+            if let filter, !filter.contains(day) { continue }
+            for (model, t) in models { out[model, default: TokenTotals()].add(t) }
+        }
+        return out
+    }
+
+    private func lastNDayKeys(_ n: Int) -> [String] {
         let cal = Calendar.current
         let now = Date()
-        let todayKey = UsageScanner.dayFmt.string(from: now)
+        return (0..<n).compactMap { cal.date(byAdding: .day, value: -$0, to: now) }
+            .map { UsageScanner.dayFmt.string(from: $0) }
+    }
 
-        let today = latest.byDay[todayKey] ?? TokenTotals()
+    private func todayKey() -> String { UsageScanner.dayFmt.string(from: Date()) }
 
-        var last7 = TokenTotals()
-        for i in 0..<7 {
-            if let d = cal.date(byAdding: .day, value: -i, to: now) {
-                if let t = latest.byDay[UsageScanner.dayFmt.string(from: d)] { last7.add(t) }
-            }
-        }
+    /// Total water across all models, each at its own rate.
+    private func water(_ perModel: [String: TokenTotals]) -> Double {
+        perModel.reduce(0.0) { $0 + water.water(forModel: $1.key, tokens: $1.value.effective) }
+    }
 
-        var all = TokenTotals()
-        for (_, v) in latest.byDay { all.add(v) }
-
-        return (today, last7, all)
+    private func tokenSum(_ perModel: [String: TokenTotals]) -> Int {
+        perModel.values.reduce(0) { $0 + $1.effective }
     }
 
     // MARK: - UI
 
     private func updateUI() {
-        let w = windowTotals()
-        let todayWater = water.water(forTokens: w.today.effective)
-        statusItem.button?.title = " " + Self.fmtWater(todayWater)
+        let perWindow: [BarWindow: [String: TokenTotals]] = [
+            .today: tokens(forDays: [todayKey()]),
+            .week:  tokens(forDays: lastNDayKeys(7)),
+            .month: tokens(forDays: lastNDayKeys(30)),
+            .all:   tokens(forDays: nil),
+        ]
+        let all = perWindow[.all] ?? [:]
+        let selected = perWindow[barWindow] ?? [:]
+
+        if let button = statusItem.button {
+            button.title = " " + Self.fmtWater(water(selected))
+            button.toolTip = "WaterMark — \(barWindow.title.lowercased()) water from Claude Code usage"
+        }
 
         let menu = NSMenu()
 
-        menu.addItem(infoRow("Today", w.today))
-        menu.addItem(infoRow("Last 7 days", w.last7))
-        menu.addItem(infoRow("All time", w.all))
+        for w in BarWindow.allCases {
+            menu.addItem(infoRow(w.title, perWindow[w] ?? [:], checked: w == barWindow))
+        }
 
         menu.addItem(.separator())
 
+        // Per-model breakdown (all time), each at its own rate.
         let byModel = NSMenuItem(title: "By model", action: nil, keyEquivalent: "")
         let modelMenu = NSMenu()
-        let models = latest.byModel.sorted { $0.value.effective > $1.value.effective }
-        if models.isEmpty {
+        let sorted = all.sorted { $0.value.effective > $1.value.effective }
+        if sorted.isEmpty {
             modelMenu.addItem(disabled("No usage found yet"))
         } else {
-            for (model, t) in models {
-                modelMenu.addItem(infoRow(model, t))
+            for (model, t) in sorted {
+                let ml = water.water(forModel: model, tokens: t.effective)
+                modelMenu.addItem(disabled("\(model): \(Self.fmtWater(ml))  ·  \(Self.fmtTokens(t.effective)) tok"))
             }
         }
         byModel.submenu = modelMenu
         menu.addItem(byModel)
 
-        menu.addItem(.separator())
+        // Per-model editable rates.
+        let ratesParent = NSMenuItem(title: "Water rates (mL / 1k tokens)", action: nil, keyEquivalent: "")
+        ratesParent.submenu = buildRatesMenu(models: all.keys.sorted())
+        menu.addItem(ratesParent)
 
-        let rateItem = NSMenuItem(
-            title: String(format: "Water rate: %.2f mL / 1k tokens", water.mlPer1kTokens),
-            action: nil, keyEquivalent: ""
-        )
-        let rateMenu = NSMenu()
-        for preset in [0.25, 0.5, 1.0, 2.0] {
-            let item = NSMenuItem(
-                title: String(format: "%.2f mL / 1k", preset),
-                action: #selector(setPreset(_:)), keyEquivalent: ""
-            )
+        // Which window the menu-bar figure shows.
+        let barParent = NSMenuItem(title: "Show in menu bar", action: nil, keyEquivalent: "")
+        let barMenu = NSMenu()
+        for w in BarWindow.allCases {
+            let item = NSMenuItem(title: w.title, action: #selector(setBarWindow(_:)), keyEquivalent: "")
             item.target = self
-            item.representedObject = preset
-            if abs(preset - water.mlPer1kTokens) < 0.0001 { item.state = .on }
-            rateMenu.addItem(item)
+            item.representedObject = w.rawValue
+            if w == barWindow { item.state = .on }
+            barMenu.addItem(item)
         }
-        rateMenu.addItem(.separator())
-        rateMenu.addItem(menuItem("Custom…", #selector(setCustomRate)))
-        rateItem.submenu = rateMenu
-        menu.addItem(rateItem)
+        barParent.submenu = barMenu
+        menu.addItem(barParent)
+
+        menu.addItem(.separator())
 
         menu.addItem(menuItem("Refresh now", #selector(refreshNow)))
 
@@ -129,10 +174,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    private func infoRow(_ label: String, _ t: TokenTotals) -> NSMenuItem {
-        let ml = water.water(forTokens: t.effective)
-        let tokens = Self.tokenFmt.string(from: NSNumber(value: t.effective)) ?? "\(t.effective)"
-        return disabled("\(label): \(Self.fmtWater(ml))  ·  \(tokens) tokens")
+    private func buildRatesMenu(models: [String]) -> NSMenu {
+        let menu = NSMenu()
+        if models.isEmpty {
+            menu.addItem(disabled("No usage yet"))
+            return menu
+        }
+        for model in models {
+            let rate = water.rate(for: model)
+            let parent = NSMenuItem(
+                title: String(format: "%@  ·  %.2f", model, rate),
+                action: nil, keyEquivalent: ""
+            )
+            let sub = NSMenu()
+            for preset in ratePresets {
+                let item = NSMenuItem(
+                    title: String(format: "%.2f mL / 1k", preset),
+                    action: #selector(setModelPreset(_:)), keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = RateChange(model: model, rate: preset)
+                if abs(preset - rate) < 0.0001 { item.state = .on }
+                sub.addItem(item)
+            }
+            sub.addItem(.separator())
+
+            let custom = NSMenuItem(title: "Custom…", action: #selector(setModelCustom(_:)), keyEquivalent: "")
+            custom.target = self
+            custom.representedObject = model
+            sub.addItem(custom)
+
+            let def = water.defaultRate(for: model)
+            let reset = NSMenuItem(
+                title: String(format: "Reset to default (%.2f)", def),
+                action: #selector(resetModelRate(_:)), keyEquivalent: ""
+            )
+            reset.target = self
+            reset.representedObject = model
+            sub.addItem(reset)
+
+            parent.submenu = sub
+            menu.addItem(parent)
+        }
+        return menu
+    }
+
+    private func infoRow(_ label: String, _ perModel: [String: TokenTotals], checked: Bool = false) -> NSMenuItem {
+        let ml = water(perModel)
+        let tokens = Self.fmtTokens(tokenSum(perModel))
+        let item = disabled("\(label): \(Self.fmtWater(ml))  ·  \(tokens) tokens")
+        if checked { item.state = .on }  // marks the window currently in the menu bar
+        return item
     }
 
     private func disabled(_ title: String) -> NSMenuItem {
@@ -147,6 +239,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return item
     }
 
+    private static func fmtTokens(_ n: Int) -> String {
+        tokenFmt.string(from: NSNumber(value: n)) ?? "\(n)"
+    }
+
     private static func fmtWater(_ ml: Double) -> String {
         if ml >= 1000 { return String(format: "%.2f L", ml / 1000) }
         if ml >= 10 { return String(format: "%.0f mL", ml) }
@@ -155,31 +251,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    @objc private func setPreset(_ sender: NSMenuItem) {
-        if let v = sender.representedObject as? Double {
-            water.mlPer1kTokens = v
+    @objc private func setModelPreset(_ sender: NSMenuItem) {
+        if let c = sender.representedObject as? RateChange {
+            water.setRate(c.rate, for: c.model)
             updateUI()
         }
     }
 
-    @objc private func setCustomRate() {
+    @objc private func setModelCustom(_ sender: NSMenuItem) {
+        guard let model = sender.representedObject as? String else { return }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Water rate"
-        alert.informativeText = "How many millilitres of water per 1,000 tokens?"
+        alert.messageText = "Water rate — \(model)"
+        alert.informativeText = "Millilitres of water per 1,000 tokens for this model."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
 
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        field.stringValue = String(format: "%.3f", water.mlPer1kTokens)
+        field.stringValue = String(format: "%.3f", water.rate(for: model))
         alert.accessoryView = field
 
         if alert.runModal() == .alertFirstButtonReturn {
             let normalized = field.stringValue.replacingOccurrences(of: ",", with: ".")
             if let v = Double(normalized), v > 0 {
-                water.mlPer1kTokens = v
+                water.setRate(v, for: model)
                 updateUI()
             }
+        }
+    }
+
+    @objc private func resetModelRate(_ sender: NSMenuItem) {
+        if let model = sender.representedObject as? String {
+            water.resetRate(for: model)
+            updateUI()
+        }
+    }
+
+    @objc private func setBarWindow(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let w = BarWindow(rawValue: raw) {
+            barWindow = w
+            updateUI()
         }
     }
 
@@ -212,10 +323,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Tokens counted: input + output + cache-creation (cache *reads* are \
         excluded as cheap retrieval).
 
-        Water = tokens ÷ 1000 × your configured rate. The default rate \
-        (0.5 mL / 1k tokens) is a conservative midpoint — real data-centre \
-        water use varies enormously with cooling design and local grid. \
-        Treat the number as a rough indicator, not a measurement.
+        Water = tokens ÷ 1000 × the rate for that model, summed across models. \
+        Each model has its own editable rate under "Water rates"; the defaults \
+        scale with model size (Opus 0.80, Sonnet 0.40, Haiku 0.15 mL / 1k). \
+        Real data-centre water use varies enormously with cooling design and \
+        local grid, so treat the number as a rough indicator, not a measurement.
 
         Everything stays on your machine. Nothing is uploaded.
         """
