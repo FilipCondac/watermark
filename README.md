@@ -32,6 +32,14 @@ That's it — the app lands in `/Applications` and the cask removes the
 quarantine flag on install, so it opens with no Gatekeeper warning. Launch it
 from Spotlight/Applications, then turn on *Launch at login* from the menu.
 
+**No admin rights?** If you're not an administrator (e.g. a managed Mac),
+installing to `/Applications` will ask for a password. Install into your home
+folder instead — no password needed:
+
+```bash
+HOMEBREW_CASK_OPTS="--appdir=~/Applications" brew install --cask filipcondac/tap/watermark
+```
+
 ### Manual download
 
 Grab `WaterMark.zip` from the [latest release](https://github.com/FilipCondac/watermark/releases/latest),
