@@ -3,8 +3,20 @@
 A macOS menu-bar app that estimates the water footprint of your Claude Code usage,
 computed entirely from local transcripts. Nothing leaves your machine.
 
-The bar shows **today's** estimated water. Click it for last-7-days, all-time, a
-per-model breakdown, and the water rate setting.
+The bar shows your estimated water for the chosen window. Click the droplet for a
+popover dashboard with everyday-water comparisons, a 30-day trend, a per-model
+breakdown, editable rates, and a shareable card.
+
+## Features
+
+- **Dashboard popover** — pick Today / 7 days / 30 days / All time; a hero figure,
+  token count, and a 30-day trend chart.
+- **In perspective** — your water vs everyday items (bottle, shower, coffee,
+  hamburger), each with a bar showing how much of one whole item it equals.
+- **By model** — per-model water, each at its own editable rate.
+- **Shareable card** — one click copies a clean image (with the repo link) to your
+  clipboard.
+- **Sources** — in-app citations and methodology so the estimate is auditable.
 
 ## How it works
 
