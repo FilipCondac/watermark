@@ -51,6 +51,9 @@ jobs:
             desc "Menu-bar estimate of Claude Code water usage"
             homepage "https://github.com/FilipCondac/watermark"
 
+            depends_on arch:  :arm64
+            depends_on macos: :ventura
+
             app "WaterMark.app"
 
             postflight do
