@@ -9,14 +9,17 @@ per-model breakdown, and the water rate setting.
 ## How it works
 
 - Reads `~/.claude/projects/**/*.jsonl` (the transcripts Claude Code already writes).
-- Sums tokens per assistant turn, deduped by message id, bucketed by local day.
+- Sums tokens per assistant turn, deduped by message id, bucketed by local day **and model**.
 - **Effective tokens** = `input + output + cache_creation`. Cache *reads* are
   excluded as cheap retrieval, not fresh compute.
-- **Water** = `effective_tokens ÷ 1000 × rate`. Default rate: **0.5 mL / 1k tokens**
-  (a conservative midpoint — editable in the menu).
-- Rescans every 60s, only re-parsing files whose size/mtime changed.
+- **Water** = `effective_tokens ÷ 1000 × rate`, computed **per model** and summed.
+  Each model has its own editable rate; defaults scale with model size
+  (Opus `0.80`, Sonnet `0.40`, Haiku `0.15` mL / 1k tokens).
+- The menu shows **Today / Last 7 days / Last 30 days / All time**, and you choose
+  which window the menu-bar figure reflects via *Show in menu bar*.
+- Re-scans every 60s, only re-parsing files whose size/mtime changed.
 
-The water rate is a rough indicator, not a measurement: real data-centre water use
+The rates are rough indicators, not measurements: real data-centre water use
 depends heavily on the model, cooling design (WUE), and local grid water intensity.
 See *About / methodology* in the app.
 
