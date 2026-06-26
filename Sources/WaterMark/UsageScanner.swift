@@ -22,14 +22,21 @@ struct TokenTotals {
     }
 }
 
-/// Usage rolled up by local calendar day and by model.
+/// Usage rolled up by local calendar day, then by model.
 struct UsageAggregate {
-    var byDay: [String: TokenTotals] = [:]
-    var byModel: [String: TokenTotals] = [:]
+    // day ("yyyy-MM-dd") -> model id -> token totals
+    var byDayModel: [String: [String: TokenTotals]] = [:]
+
+    mutating func add(day: String, model: String, _ t: TokenTotals) {
+        byDayModel[day, default: [:]][model, default: TokenTotals()].add(t)
+    }
 
     mutating func merge(_ o: UsageAggregate) {
-        for (k, v) in o.byDay { byDay[k, default: TokenTotals()].add(v) }
-        for (k, v) in o.byModel { byModel[k, default: TokenTotals()].add(v) }
+        for (day, models) in o.byDayModel {
+            for (model, t) in models {
+                byDayModel[day, default: [:]][model, default: TokenTotals()].add(t)
+            }
+        }
     }
 }
 
@@ -135,8 +142,7 @@ final class UsageScanner {
             t.cacheRead = (usage["cache_read_input_tokens"] as? Int) ?? 0
 
             let day = Self.localDay(fromISO: obj["timestamp"] as? String)
-            agg.byDay[day, default: TokenTotals()].add(t)
-            agg.byModel[model, default: TokenTotals()].add(t)
+            agg.add(day: day, model: model, t)
         }
 
         return agg
