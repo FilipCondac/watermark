@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+*.xcodeproj
+WaterMark.app/
+WaterMark.zip
+WaterMark.dmg
+.DS_Store
