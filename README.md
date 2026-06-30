@@ -5,7 +5,15 @@ computed entirely from local transcripts. Nothing leaves your machine.
 
 The bar shows your estimated water for the chosen window. Click the droplet for a
 popover dashboard with everyday-water comparisons, a 30-day trend, a per-model
-breakdown, editable rates, and a shareable card.
+breakdown, editable coefficients, and a shareable card.
+
+## Why
+
+"AI is drinking the planet dry" is one of the loudest takes around. WaterMark
+measures the real number from your own usage — with fair, sourced, comprehensive
+figures — and puts it next to everyday things. Not to wave away AI's footprint,
+just to keep it in proportion: a whole history of coding usually lands somewhere
+around a single shower, and a rounding error next to a hamburger.
 
 ## Features
 
@@ -13,7 +21,7 @@ breakdown, editable rates, and a shareable card.
   token count, and a 30-day trend chart.
 - **In perspective** — your water vs everyday items (bottle, shower, coffee,
   hamburger), each with a bar showing how much of one whole item it equals.
-- **By model** — per-model water, each at its own editable rate.
+- **By model** — per-model water, each with its own editable energy coefficients.
 - **Shareable card** — one click copies a clean image (with the repo link) to your
   clipboard.
 - **Sources** — in-app citations and methodology so the estimate is auditable.
@@ -22,18 +30,21 @@ breakdown, editable rates, and a shareable card.
 
 - Reads `~/.claude/projects/**/*.jsonl` (the transcripts Claude Code already writes).
 - Sums tokens per assistant turn, deduped by message id, bucketed by local day **and model**.
-- **Effective tokens** = `input + output + cache_creation`. Cache *reads* are
-  excluded as cheap retrieval, not fresh compute.
-- **Water** = `effective_tokens ÷ 1000 × rate`, computed **per model** and summed.
-  Each model has its own editable rate; defaults scale with model size
-  (Opus `0.80`, Sonnet `0.40`, Haiku `0.15` mL / 1k tokens).
-- The menu shows **Today / Last 7 days / Last 30 days / All time**, and you choose
-  which window the menu-bar figure reflects via *Show in menu bar*.
-- Re-scans every 60s, only re-parsing files whose size/mtime changed.
+- **Tokens → energy → water**, per model, summed:
+  - `energy = output × e_out + (input + cache_creation) × e_prefill` (Wh/1k). Decode
+    costs far more per token than prefill; cache *reads* are excluded (free retrieval).
+  - `water = energy × (WUE_onsite + WUE_source)`. **Comprehensive** scope adds the
+    off-site grid-electricity term (~4.35 L/kWh) on top of on-site cooling (~0.30).
+- Energy defaults are calibrated to public measurements (Google's median Gemini prompt
+  ≈ 0.24 Wh; the "How Hungry is AI?" benchmark). Every coefficient is editable.
+- Optionally adds your **amortised share of model training** (training ÷ MAU) as a
+  separate one-time figure.
+- The menu shows **Today / 7 / 30 days / All time**; pick which the bar reflects via
+  *Show in menu bar*. Re-scans every 60s, only re-parsing changed files.
 
-The rates are rough indicators, not measurements: real data-centre water use
-depends heavily on the model, cooling design (WUE), and local grid water intensity.
-See *About / methodology* in the app.
+These are order-of-magnitude estimates, not measurements: Anthropic publishes no
+per-token energy or water for Claude, and the dominant unknown is which region/grid
+served your requests. See *Sources* in the app for citations.
 
 ## Install
 
