@@ -11,6 +11,10 @@ struct TokenTotals {
     /// Cache *reads* are excluded: they are cheap retrieval, not recomputation.
     var effective: Int { input + output + cacheCreation }
 
+    /// Tokens processed during prefill (reading the prompt) — far cheaper per
+    /// token than decode. Cache reads excluded.
+    var prefill: Int { input + cacheCreation }
+
     /// Everything, including cache reads.
     var total: Int { input + output + cacheCreation + cacheRead }
 
