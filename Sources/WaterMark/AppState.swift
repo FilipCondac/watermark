@@ -61,8 +61,12 @@ final class AppState: ObservableObject {
         return out
     }
 
+    private func waterML(_ model: String, _ t: TokenTotals) -> Double {
+        water.waterML(forModel: model, output: t.output, prefill: t.prefill)
+    }
+
     func waterML(for w: BarWindow) -> Double {
-        tokens(for: w).reduce(0.0) { $0 + water.water(forModel: $1.key, tokens: $1.value.effective) }
+        tokens(for: w).reduce(0.0) { $0 + waterML($1.key, $1.value) }
     }
 
     func effectiveTokens(for w: BarWindow) -> Int {
@@ -72,8 +76,7 @@ final class AppState: ObservableObject {
     /// Per-model rows for a window, sorted by water descending.
     func perModel(for w: BarWindow) -> [(model: String, tokens: Int, ml: Double)] {
         tokens(for: w)
-            .map { (model: $0.key, tokens: $0.value.effective,
-                    ml: water.water(forModel: $0.key, tokens: $0.value.effective)) }
+            .map { (model: $0.key, tokens: $0.value.effective, ml: waterML($0.key, $0.value)) }
             .sorted { $0.ml > $1.ml }
     }
 
@@ -84,7 +87,7 @@ final class AppState: ObservableObject {
         return (0..<n).reversed().map { offset in
             guard let d = cal.date(byAdding: .day, value: -offset, to: now) else { return 0 }
             let models = aggregate.byDayModel[Self.dayKey(d)] ?? [:]
-            return models.reduce(0.0) { $0 + water.water(forModel: $1.key, tokens: $1.value.effective) }
+            return models.reduce(0.0) { $0 + waterML($1.key, $1.value) }
         }
     }
 
@@ -97,10 +100,62 @@ final class AppState: ObservableObject {
 
     // MARK: - Rates
 
-    func rate(for model: String) -> Double { water.rate(for: model) }
-    func defaultRate(for model: String) -> Double { water.defaultRate(for: model) }
-    func setRate(_ v: Double, for model: String) { water.setRate(max(0, v), for: model); ratesTick += 1 }
-    func resetRate(for model: String) { water.resetRate(for: model); ratesTick += 1 }
+    // MARK: - Energy coefficients (Wh / 1k tokens)
+
+    func outWhPer1k(for model: String) -> Double { water.outWhPer1k(for: model) }
+    func prefillWhPer1k(for model: String) -> Double { water.prefillWhPer1k(for: model) }
+    func defaultEnergy(for model: String) -> (out: Double, prefill: Double) {
+        let e = water.defaultEnergy(for: model); return (e.out, e.prefill)
+    }
+    func setOutWhPer1k(_ v: Double, for model: String) { water.setOutWhPer1k(v, for: model); ratesTick += 1 }
+    func setPrefillWhPer1k(_ v: Double, for model: String) { water.setPrefillWhPer1k(v, for: model); ratesTick += 1 }
+    func resetEnergy(for model: String) { water.resetEnergy(for: model); ratesTick += 1 }
+
+    // MARK: - Water intensity (L/kWh)
+
+    var wueOnsite: Double {
+        get { water.wueOnsite }
+        set { water.wueOnsite = newValue; ratesTick += 1 }
+    }
+    var wueSource: Double {
+        get { water.wueSource }
+        set { water.wueSource = newValue; ratesTick += 1 }
+    }
+    var comprehensive: Bool {
+        get { water.comprehensive }
+        set { water.comprehensive = newValue; ratesTick += 1 }
+    }
+
+    // MARK: - Training (amortised, estimated)
+
+    var includeTraining: Bool {
+        get { water.includeTraining }
+        set { water.includeTraining = newValue; ratesTick += 1 }
+    }
+
+    /// MAU expressed in millions, for tidy editing.
+    var mauMillions: Double {
+        get { water.monthlyActiveUsers / 1_000_000 }
+        set { water.monthlyActiveUsers = max(0, newValue) * 1_000_000; ratesTick += 1 }
+    }
+
+    var mauText: String { AppState.fmtTokensCompact(Int(water.monthlyActiveUsers)) }
+
+    func trainingLiters(for model: String) -> Double { water.trainingLiters(for: model) }
+    func defaultTrainingLiters(for model: String) -> Double { water.defaultTrainingLiters(for: model) }
+    func setTrainingLiters(_ v: Double, for model: String) { water.setTrainingLiters(v, for: model); ratesTick += 1 }
+    func resetTrainingLiters(for model: String) { water.resetTrainingLiters(for: model); ratesTick += 1 }
+
+    /// Your one-time amortised training share (mL) across every model you've used.
+    var lifetimeTrainingShareML: Double {
+        guard includeTraining else { return 0 }
+        return allModels.reduce(0.0) { $0 + water.trainingShareML(for: $1) }
+    }
+
+    /// All-time inference water + your amortised training share.
+    var lifetimeTotalML: Double {
+        waterML(for: .all) + lifetimeTrainingShareML
+    }
 
     // MARK: - Launch at login
 

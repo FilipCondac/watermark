@@ -76,6 +76,7 @@ private struct MainView: View {
                     TrendCard(series: state.dailySeries(30))
                     PerspectiveSection(ml: ml)
                     ByModelSection(state: state)
+                    TrainingCard(state: state)
                 }
                 .padding(14)
             }
@@ -216,6 +217,41 @@ private struct ByModelSection: View {
     }
 }
 
+private struct TrainingCard: View {
+    @ObservedObject var state: AppState
+
+    var body: some View {
+        let share = state.lifetimeTrainingShareML
+        if state.includeTraining && share > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionHeader(title: "Model training (your share)", systemImage: "gearshape.2.fill")
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        Text("🏭").font(.title3)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("≈ \(AppState.fmtWater(share)) · one-time")
+                                .font(.callout).fontWeight(.medium)
+                            Text("Your lifetime share of training water, split across ~\(state.mauText) active users · estimated")
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(3)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    Divider()
+                    HStack {
+                        Text("Lifetime total (inference + training)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(AppState.fmtWater(state.lifetimeTotalML))
+                            .font(.callout).fontWeight(.semibold).monospacedDigit()
+                    }
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+    }
+}
+
 private struct FooterBar: View {
     @ObservedObject var state: AppState
     @Binding var route: PopoverRoute
@@ -277,10 +313,12 @@ private struct SourcesView: View {
             VStack(alignment: .leading, spacing: 14) {
                 SectionHeader(title: "How the estimate works", systemImage: "function")
                 Text("""
-                Water = tokens ÷ 1000 × the rate for each model, summed across models. \
-                Tokens counted: input + output + cache-creation (cache reads are excluded \
-                as cheap retrieval). Per-model rates default to size-based values and are \
-                editable in Settings. All computed locally from ~/.claude/projects.
+                Tokens → energy → water, per model, summed. Energy = output × e_out + \
+                (input + cache-creation) × e_prefill (Wh/1k); cache reads are excluded. \
+                Water = energy × (on-site cooling WUE + off-site grid-electricity WUE); \
+                "comprehensive" includes the off-site term. Coefficients default to \
+                size-based public-proxy estimates and are editable in Settings. All \
+                computed locally from ~/.claude/projects.
                 """)
                 .font(.caption).foregroundStyle(.secondary)
 
@@ -288,14 +326,19 @@ private struct SourcesView: View {
 
                 SectionHeader(title: "Sources", systemImage: "book.fill")
                 SourceLink(
-                    title: "Making AI Less Thirsty (UC Riverside, 2023)",
-                    url: "https://arxiv.org/abs/2304.03271",
-                    note: "Estimates of data-centre water use for AI training & inference."
+                    title: "Google — Environmental impact of AI inference (2025)",
+                    url: "https://arxiv.org/abs/2508.15734",
+                    note: "Median Gemini prompt: 0.24 Wh, 0.26 mL water — anchors the energy defaults."
                 )
                 SourceLink(
-                    title: "A bottle of water per email (Washington Post, 2024)",
-                    url: "https://www.washingtonpost.com/technology/2024/09/18/energy-ai-use-electricity-water-data-centers/",
-                    note: "Reporting on worst-case GPT-4 water use in water-stressed regions."
+                    title: "How Hungry is AI? Benchmarking LLM inference (2025)",
+                    url: "https://arxiv.org/abs/2505.09598",
+                    note: "Per-query energy/water and the WUE_onsite + WUE_source water formula."
+                )
+                SourceLink(
+                    title: "Making AI Less Thirsty (UC Riverside, 2023)",
+                    url: "https://arxiv.org/abs/2304.03271",
+                    note: "Training water (GPT-3 ~5.4M L) and the worst-case per-prompt figures."
                 )
                 SourceLink(
                     title: "Water Footprint Network",
@@ -343,33 +386,82 @@ private struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                SectionHeader(title: "Water rates (mL / 1k tokens)", systemImage: "slider.horizontal.3")
+                SectionHeader(title: "Water intensity (L / kWh)", systemImage: "drop.triangle.fill")
+
+                Toggle("Comprehensive (include grid-electricity water)", isOn: Binding(
+                    get: { state.comprehensive },
+                    set: { state.comprehensive = $0 }
+                ))
+                .toggleStyle(.switch)
+                .font(.callout)
+
+                HStack {
+                    Text("On-site (cooling)").font(.callout)
+                    Spacer(minLength: 4)
+                    NumberField(value: Binding(get: { state.wueOnsite }, set: { state.wueOnsite = $0 }))
+                }
+                HStack {
+                    Text("Off-site (electricity)").font(.callout)
+                        .foregroundStyle(state.comprehensive ? .primary : .secondary)
+                    Spacer(minLength: 4)
+                    NumberField(value: Binding(get: { state.wueSource }, set: { state.wueSource = $0 }),
+                                enabled: state.comprehensive)
+                }
+
+                Divider()
+
+                SectionHeader(title: "Energy per model (Wh / 1k tokens)", systemImage: "bolt.fill")
 
                 if state.allModels.isEmpty {
                     Text("No usage recorded yet.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
                     ForEach(state.allModels, id: \.self) { model in
-                        RateRow(state: state, model: model)
+                        EnergyRow(state: state, model: model)
                     }
                 }
 
                 Divider()
 
-                Toggle("Launch at login", isOn: Binding(
-                    get: { state.launchAtLogin },
-                    set: { state.setLaunchAtLogin($0) }
+                SectionHeader(title: "Training (amortised · estimated)", systemImage: "gearshape.2.fill")
+
+                Toggle("Include training share", isOn: Binding(
+                    get: { state.includeTraining },
+                    set: { state.includeTraining = $0 }
                 ))
                 .toggleStyle(.switch)
                 .font(.callout)
+
+                if state.includeTraining {
+                    HStack {
+                        Text("Monthly active users").font(.callout)
+                        Spacer(minLength: 4)
+                        TextField("", value: Binding(
+                            get: { state.mauMillions },
+                            set: { state.mauMillions = $0 }
+                        ), format: .number.precision(.fractionLength(0...1)))
+                        .frame(width: 64).multilineTextAlignment(.trailing).textFieldStyle(.roundedBorder)
+                        Text("M").font(.callout).foregroundStyle(.secondary)
+                    }
+
+                    Text("Training water per model (million litres):")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(state.allModels, id: \.self) { model in
+                        TrainingRow(state: state, model: model)
+                    }
+
+                    Text("Estimated from public proxies (training energy × a water-use factor); Anthropic doesn't publish training water or Claude's MAU. Edit to match better figures.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
 
                 Divider()
 
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach([
-                        "Water = tokens ÷ 1000 × each model's rate, summed across models.",
-                        "Tokens counted: input + output + cache-creation (cache reads excluded).",
-                        "Rates are rough indicators — see Sources for details.",
+                        "Tokens → energy → water. Output (decode) costs far more per token than prefill.",
+                        "Energy = output × e_out + (input + cache-creation) × e_prefill; cache reads are free.",
+                        "Water = energy × (on-site WUE + off-site grid WUE). Comprehensive adds the off-site term.",
+                        "Defaults are public-proxy estimates (Google 2025, How Hungry is AI 2025) — see Sources.",
                         "Everything stays on your machine.",
                     ], id: \.self) { line in
                         HStack(alignment: .top, spacing: 6) {
@@ -380,6 +472,15 @@ private struct SettingsView: View {
                     }
                 }
                 .font(.caption2).foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle("Launch at login", isOn: Binding(
+                    get: { state.launchAtLogin },
+                    set: { state.setLaunchAtLogin($0) }
+                ))
+                .toggleStyle(.switch)
+                .font(.callout)
             }
             .padding(14)
         }
@@ -387,28 +488,82 @@ private struct SettingsView: View {
     }
 }
 
-private struct RateRow: View {
+/// A compact right-aligned numeric field used across settings.
+private struct NumberField: View {
+    @Binding var value: Double
+    var enabled: Bool = true
+    var width: CGFloat = 60
+
+    var body: some View {
+        TextField("", value: $value, format: .number.precision(.fractionLength(0...2)))
+            .frame(width: width)
+            .multilineTextAlignment(.trailing)
+            .textFieldStyle(.roundedBorder)
+            .disabled(!enabled)
+    }
+}
+
+private struct EnergyRow: View {
+    @ObservedObject var state: AppState
+    let model: String
+
+    var body: some View {
+        let def = state.defaultEnergy(for: model)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(AppState.prettyModel(model)).font(.callout)
+                Spacer()
+                Button { state.resetEnergy(for: model) } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .help("Reset to defaults")
+            }
+            HStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    Text("output").font(.caption2).foregroundStyle(.secondary)
+                    NumberField(value: Binding(
+                        get: { state.outWhPer1k(for: model) },
+                        set: { state.setOutWhPer1k($0, for: model) }
+                    ), width: 54)
+                }
+                HStack(spacing: 4) {
+                    Text("prefill").font(.caption2).foregroundStyle(.secondary)
+                    NumberField(value: Binding(
+                        get: { state.prefillWhPer1k(for: model) },
+                        set: { state.setPrefillWhPer1k($0, for: model) }
+                    ), width: 54)
+                }
+                Spacer(minLength: 0)
+            }
+            Text(String(format: "default %.2f / %.2f Wh per 1k", def.out, def.prefill))
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct TrainingRow: View {
     @ObservedObject var state: AppState
     let model: String
 
     var body: some View {
         let binding = Binding(
-            get: { state.rate(for: model) },
-            set: { state.setRate($0, for: model) }
+            get: { state.trainingLiters(for: model) / 1_000_000 },
+            set: { state.setTrainingLiters($0 * 1_000_000, for: model) }
         )
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(AppState.prettyModel(model)).font(.callout)
-                Text(String(format: "default %.2f", state.defaultRate(for: model)))
+                Text(String(format: "default %.0f", state.defaultTrainingLiters(for: model) / 1_000_000))
                     .font(.caption2).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
-            TextField("", value: binding, format: .number.precision(.fractionLength(0...3)))
-                .frame(width: 56)
+            TextField("", value: binding, format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 72)
                 .multilineTextAlignment(.trailing)
                 .textFieldStyle(.roundedBorder)
-            Stepper("", value: binding, in: 0...10, step: 0.05).labelsHidden()
-            Button { state.resetRate(for: model) } label: {
+            Text("M L").font(.caption).foregroundStyle(.secondary)
+            Button { state.resetTrainingLiters(for: model) } label: {
                 Image(systemName: "arrow.uturn.backward")
             }
             .buttonStyle(.plain).foregroundStyle(.secondary)
