@@ -62,7 +62,7 @@ final class AppState: ObservableObject {
     }
 
     private func waterML(_ model: String, _ t: TokenTotals) -> Double {
-        water.waterML(forModel: model, output: t.output, prefill: t.prefill)
+        water.waterML(forModel: model, output: t.output, prefill: t.prefill, cacheRead: t.cacheRead)
     }
 
     func waterML(for w: BarWindow) -> Double {
@@ -111,6 +111,16 @@ final class AppState: ObservableObject {
     func setPrefillWhPer1k(_ v: Double, for model: String) { water.setPrefillWhPer1k(v, for: model); ratesTick += 1 }
     func resetEnergy(for model: String) { water.resetEnergy(for: model); ratesTick += 1 }
 
+    /// Whether we recognise this model id's size family (opus/sonnet/haiku).
+    /// Unknown families use generic mid-size defaults and are flagged in Settings.
+    func isRecognizedFamily(_ model: String) -> Bool { water.family(for: model) != nil }
+
+    /// Cache-read energy cost as a percentage of the prefill rate.
+    var cacheReadPercent: Double {
+        get { water.cacheReadFactor * 100 }
+        set { water.cacheReadFactor = newValue / 100; ratesTick += 1 }
+    }
+
     // MARK: - Water intensity (L/kWh)
 
     var wueOnsite: Double {
@@ -133,23 +143,17 @@ final class AppState: ObservableObject {
         set { water.includeTraining = newValue; ratesTick += 1 }
     }
 
-    /// MAU expressed in millions, for tidy editing.
-    var mauMillions: Double {
-        get { water.monthlyActiveUsers / 1_000_000 }
-        set { water.monthlyActiveUsers = max(0, newValue) * 1_000_000; ratesTick += 1 }
+    /// Training uplift as a percentage of inference water, for tidy editing.
+    var trainingUpliftPercent: Double {
+        get { water.trainingUplift * 100 }
+        set { water.trainingUplift = max(0, newValue) / 100; ratesTick += 1 }
     }
 
-    var mauText: String { AppState.fmtTokensCompact(Int(water.monthlyActiveUsers)) }
-
-    func trainingLiters(for model: String) -> Double { water.trainingLiters(for: model) }
-    func defaultTrainingLiters(for model: String) -> Double { water.defaultTrainingLiters(for: model) }
-    func setTrainingLiters(_ v: Double, for model: String) { water.setTrainingLiters(v, for: model); ratesTick += 1 }
-    func resetTrainingLiters(for model: String) { water.resetTrainingLiters(for: model); ratesTick += 1 }
-
-    /// Your one-time amortised training share (mL) across every model you've used.
+    /// Your amortised training share (mL): a usage-proportional uplift on
+    /// all-time inference water, not an equal per-user split.
     var lifetimeTrainingShareML: Double {
         guard includeTraining else { return 0 }
-        return allModels.reduce(0.0) { $0 + water.trainingShareML(for: $1) }
+        return waterML(for: .all) * water.trainingUplift
     }
 
     /// All-time inference water + your amortised training share.

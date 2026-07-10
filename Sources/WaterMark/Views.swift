@@ -122,12 +122,11 @@ private struct TrendCard: View {
             SectionHeader(title: "Last 30 days", systemImage: "chart.xyaxis.line")
             Chart(Array(series.enumerated()), id: \.offset) { index, value in
                 AreaMark(x: .value("Day", index), y: .value("mL", value))
-                    .foregroundStyle(.linearGradient(colors: [.blue.opacity(0.35), .blue.opacity(0.02)],
-                                                     startPoint: .top, endPoint: .bottom))
+                    .foregroundStyle(.blue.opacity(0.10))
                     .interpolationMethod(.catmullRom)
                 LineMark(x: .value("Day", index), y: .value("mL", value))
                     .foregroundStyle(.blue)
-                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+                    .lineStyle(StrokeStyle(lineWidth: 2))
                     .interpolationMethod(.catmullRom)
             }
             .chartXAxis(.hidden)
@@ -146,44 +145,43 @@ private struct PerspectiveSection: View {
             ForEach(Comparisons.all) { c in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        Text(c.emoji).font(.title3)
-                        Text(Comparisons.describe(ml: ml, c))
+                        Text(c.emoji).font(.body)
+                        Text(c.name.prefix(1).uppercased() + c.name.dropFirst())
                             .font(.callout).fontWeight(.medium)
-                        Spacer(minLength: 0)
+                        Text("– \(Comparisons.litersText(c))")
+                            .font(.callout).foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Text(Comparisons.compactValue(ml: ml, c))
+                            .font(.callout).fontWeight(.semibold).monospacedDigit()
                     }
-                    ComparisonBar(
-                        fraction: Comparisons.fraction(ml: ml, c),
-                        full: Comparisons.count(ml: ml, c) >= 1
-                    )
-                    Text(c.note)
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                    ComparisonBar(fraction: Comparisons.fraction(ml: ml, c))
                 }
                 .padding(10)
                 .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
                 .help(c.note)
             }
+            Text("Blue water (freshwater) — the kind data centres use. Details in Sources.")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
     }
 }
 
-/// A thin progress bar: how much of one whole item the usage equals.
+/// A meter: how much of one whole item the usage equals. Solid fill with a
+/// hard cutoff at the value; the unfilled track is a lighter step of the same
+/// hue so the whole bar reads as one meter.
 private struct ComparisonBar: View {
     let fraction: Double  // 0...1
-    let full: Bool        // usage exceeds one whole item
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
-                Capsule()
-                    .fill(full
-                          ? AnyShapeStyle(LinearGradient(colors: [.teal, .green],
-                                                         startPoint: .leading, endPoint: .trailing))
-                          : AnyShapeStyle(.blue.gradient))
-                    .frame(width: fraction > 0 ? max(3, geo.size.width * fraction) : 0)
+                Rectangle().fill(.blue.opacity(0.16))
+                Rectangle().fill(.blue)
+                    .frame(width: fraction > 0 ? max(2, geo.size.width * fraction) : 0)
             }
+            .clipShape(RoundedRectangle(cornerRadius: 3))
         }
-        .frame(height: 6)
+        .frame(height: 8)
     }
 }
 
@@ -205,11 +203,14 @@ private struct ByModelSection: View {
                                 .font(.callout).monospacedDigit().foregroundStyle(.secondary)
                         }
                         GeometryReader { geo in
-                            Capsule()
-                                .fill(.blue.gradient)
-                                .frame(width: max(4, geo.size.width * (maxML > 0 ? r.ml / maxML : 0)))
+                            ZStack(alignment: .leading) {
+                                Rectangle().fill(.blue.opacity(0.16))
+                                Rectangle().fill(.blue)
+                                    .frame(width: max(2, geo.size.width * (maxML > 0 ? r.ml / maxML : 0)))
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 2))
                         }
-                        .frame(height: 5)
+                        .frame(height: 6)
                     }
                 }
             }
@@ -229,9 +230,9 @@ private struct TrainingCard: View {
                     HStack(spacing: 10) {
                         Text("🏭").font(.title3)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("≈ \(AppState.fmtWater(share)) · one-time")
+                            Text("≈ \(AppState.fmtWater(share)) · amortised")
                                 .font(.callout).fontWeight(.medium)
-                            Text("Your lifetime share of training water, split across ~\(state.mauText) active users · estimated")
+                            Text("Your share of one-time model training, in proportion to your usage (\(Int(state.trainingUpliftPercent))% of inference water) · estimated")
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(3)
                         }
                         Spacer(minLength: 0)
@@ -313,12 +314,66 @@ private struct SourcesView: View {
             VStack(alignment: .leading, spacing: 14) {
                 SectionHeader(title: "How the estimate works", systemImage: "function")
                 Text("""
-                Tokens → energy → water, per model, summed. Energy = output × e_out + \
-                (input + cache-creation) × e_prefill (Wh/1k); cache reads are excluded. \
+                Tokens → energy → water, per model, summed. \
+                Energy = output × e_out + (input + cache-creation) × e_prefill + \
+                cache-reads × e_prefill × 10% (Wh/1k). \
                 Water = energy × (on-site cooling WUE + off-site grid-electricity WUE); \
-                "comprehensive" includes the off-site term. Coefficients default to \
-                size-based public-proxy estimates and are editable in Settings. All \
-                computed locally from ~/.claude/projects.
+                "comprehensive" includes the off-site term. An optional training share \
+                adds a usage-proportional uplift on top. Every coefficient is editable \
+                in Settings. All computed locally from ~/.claude/projects.
+                """)
+                .font(.caption).foregroundStyle(.secondary)
+
+                Divider()
+
+                SectionHeader(title: "Where the numbers come from", systemImage: "number.square.fill")
+                Text("""
+                Energy per token. Measurement studies find generating a token (decode) \
+                costs roughly 11× more energy than reading one (prefill), hence separate \
+                coefficients. The defaults (e.g. 2.0 Wh/1k output for an Opus-class \
+                model) deliberately sit above published GPT-4o-class estimates \
+                (~0.6–1.4 Wh/1k output) to leave headroom for long coding contexts, \
+                where flat per-token rates undercount: attention cost grows with context \
+                length, and Epoch AI puts a 100k-token prompt at ~40 Wh. Google's \
+                widely-quoted 0.24 Wh median Gemini prompt publishes no token counts, \
+                so it serves as an order-of-magnitude cross-check, not a calibration \
+                point — and its 0.26 mL water figure is on-site cooling only.
+
+                Cache reads. Coding agents read the prompt cache constantly — often \
+                over 90% of all tokens. Cache reads skip prefill recompute but are not \
+                free; they default to 10% of the prefill rate, mirroring how they are \
+                priced (10% of base input).
+
+                Water per kWh. On-site cooling defaults to 0.30 L/kWh: Anthropic serves \
+                mostly from AWS (reported 0.15–0.18) and Google Cloud (~1.0–1.1), so \
+                0.30 is a fair middle. The off-site term defaults to 4.35 L/kWh, the US \
+                grid's water consumption per kWh implied by the LBNL 2024 report — a \
+                deliberately high figure, since it includes hydro-reservoir evaporation \
+                ("How Hungry is AI?" uses 3.14). Both are consumption-basis, the right \
+                basis for comparing against everyday water use.
+
+                Training share. Credible lifecycle analyses (Epoch AI, Luccioni et al. \
+                2024, Mistral's 2025 LCA) amortise one-time training over lifetime \
+                inference volume — never equally per user. Fleet-wide, 80–90% of AI \
+                compute is inference, making amortised training a ~10–25% overhead on \
+                inference; the default uplift is 15%.
+                """)
+                .font(.caption).foregroundStyle(.secondary)
+
+                Divider()
+
+                SectionHeader(title: "Rainwater vs freshwater", systemImage: "cloud.rain.fill")
+                Text("""
+                Food water footprints split into green water (rain falling on crops and \
+                pasture), blue water (freshwater drawn from rivers, lakes and aquifers) \
+                and grey water (dilution). Data centres use blue water, so the \
+                comparisons here use blue-water figures: ~82 L for a 150 g hamburger \
+                and ~1 L for a cup of coffee (Mekonnen & Hoekstra 2012; Chapagain & \
+                Hoekstra 2007). The headline figures — 2,400 L per burger, 140 L per \
+                coffee — are green-dominated totals, and using them against AI's blue \
+                water would flatter AI by ~30×. One nuance cuts the other way: shower \
+                water is withdrawn but almost all returns to treatment, while \
+                evaporative cooling water is consumed.
                 """)
                 .font(.caption).foregroundStyle(.secondary)
 
@@ -328,22 +383,42 @@ private struct SourcesView: View {
                 SourceLink(
                     title: "Google — Environmental impact of AI inference (2025)",
                     url: "https://arxiv.org/abs/2508.15734",
-                    note: "Median Gemini prompt: 0.24 Wh, 0.26 mL water — anchors the energy defaults."
+                    note: "Median Gemini prompt: 0.24 Wh, 0.26 mL (on-site only). No token counts — an order-of-magnitude cross-check."
                 )
                 SourceLink(
                     title: "How Hungry is AI? Benchmarking LLM inference (2025)",
                     url: "https://arxiv.org/abs/2505.09598",
-                    note: "Per-query energy/water and the WUE_onsite + WUE_source water formula."
+                    note: "GPT-4o short query ≈ 0.42 Wh; the WUE_onsite + WUE_source formula (it uses 3.14 L/kWh off-site)."
+                )
+                SourceLink(
+                    title: "From Prompts to Power (2025)",
+                    url: "https://arxiv.org/abs/2511.05597",
+                    note: "155-model measurement study; output tokens ≈ 11× input-token energy — grounds the decode/prefill split."
+                )
+                SourceLink(
+                    title: "Epoch AI — How much energy does ChatGPT use?",
+                    url: "https://epoch.ai/gradient-updates/how-much-energy-does-chatgpt-use",
+                    note: "Per-query estimates incl. long contexts (100k-token prompt ≈ 40 Wh); amortises training over query volume."
+                )
+                SourceLink(
+                    title: "LBNL — US Data Center Energy Usage Report (2024)",
+                    url: "https://eta-publications.lbl.gov/sites/default/files/2024-12/lbnl-2024-united-states-data-center-energy-usage-report_1.pdf",
+                    note: "Source of the 4.35 L/kWh US grid water-consumption intensity and US data-centre water totals."
                 )
                 SourceLink(
                     title: "Making AI Less Thirsty (UC Riverside, 2023)",
                     url: "https://arxiv.org/abs/2304.03271",
-                    note: "Training water (GPT-3 ~5.4M L) and the worst-case per-prompt figures."
+                    note: "GPT-3 training ≈ 5.4M L total / 0.7M L on-site; US grid EWIF 3.1 L/kWh consumption."
+                )
+                SourceLink(
+                    title: "Mekonnen & Hoekstra — Farm animal products (2012)",
+                    url: "https://www.waterfootprint.org/resources/Mekonnen-Hoekstra-2012-WaterFootprintFarmAnimalProducts_1.pdf",
+                    note: "Beef: 15,415 L/kg total, of which 550 L/kg blue — the burger green/blue split."
                 )
                 SourceLink(
                     title: "Water Footprint Network",
                     url: "https://www.waterfootprint.org/resources/interactive-tools/product-gallery/",
-                    note: "Water footprints of coffee, beef, etc. used in the comparisons."
+                    note: "Virtual-water totals for coffee, beef, etc. (green + blue + grey)."
                 )
 
                 Divider()
@@ -351,7 +426,8 @@ private struct SourcesView: View {
                 Text("""
                 These are rough estimates, not measurements. Real data-centre water use \
                 varies by orders of magnitude with cooling design (WUE) and local grid \
-                water intensity. Tune the rates if you have better figures.
+                water intensity, and Anthropic publishes no per-token energy, water, or \
+                training figures for Claude. Tune the rates if you have better figures.
                 """)
                 .font(.caption2).foregroundStyle(.secondary)
             }
@@ -421,6 +497,18 @@ private struct SettingsView: View {
                     }
                 }
 
+                HStack {
+                    Text("Cache reads (% of prefill)").font(.callout)
+                    Spacer(minLength: 4)
+                    NumberField(value: Binding(
+                        get: { state.cacheReadPercent },
+                        set: { state.cacheReadPercent = $0 }
+                    ))
+                    Text("%").font(.callout).foregroundStyle(.secondary)
+                }
+                Text("Cache reads often dominate coding-agent usage (>90% of tokens). They skip recompute but aren't free; default mirrors their 10%-of-input pricing.")
+                    .font(.caption2).foregroundStyle(.secondary)
+
                 Divider()
 
                 SectionHeader(title: "Training (amortised · estimated)", systemImage: "gearshape.2.fill")
@@ -434,23 +522,16 @@ private struct SettingsView: View {
 
                 if state.includeTraining {
                     HStack {
-                        Text("Monthly active users").font(.callout)
+                        Text("Uplift on inference water").font(.callout)
                         Spacer(minLength: 4)
-                        TextField("", value: Binding(
-                            get: { state.mauMillions },
-                            set: { state.mauMillions = $0 }
-                        ), format: .number.precision(.fractionLength(0...1)))
-                        .frame(width: 64).multilineTextAlignment(.trailing).textFieldStyle(.roundedBorder)
-                        Text("M").font(.callout).foregroundStyle(.secondary)
+                        NumberField(value: Binding(
+                            get: { state.trainingUpliftPercent },
+                            set: { state.trainingUpliftPercent = $0 }
+                        ))
+                        Text("%").font(.callout).foregroundStyle(.secondary)
                     }
 
-                    Text("Training water per model (million litres):")
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(state.allModels, id: \.self) { model in
-                        TrainingRow(state: state, model: model)
-                    }
-
-                    Text("Estimated from public proxies (training energy × a water-use factor); Anthropic doesn't publish training water or Claude's MAU. Edit to match better figures.")
+                    Text("One-time training water, amortised in proportion to your usage — the way lifecycle analyses do it (never per user). Fleet-wide, inference is 80–90% of AI compute, putting training at a ~10–25% overhead; default 15%.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
@@ -458,10 +539,11 @@ private struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach([
-                        "Tokens → energy → water. Output (decode) costs far more per token than prefill.",
-                        "Energy = output × e_out + (input + cache-creation) × e_prefill; cache reads are free.",
+                        "Tokens → energy → water. Output (decode) costs ~11× more per token than prefill.",
+                        "Energy = output × e_out + (input + cache-creation) × e_prefill + cache-reads × e_prefill × 10%.",
                         "Water = energy × (on-site WUE + off-site grid WUE). Comprehensive adds the off-site term.",
-                        "Defaults are public-proxy estimates (Google 2025, How Hungry is AI 2025) — see Sources.",
+                        "Training adds a usage-proportional uplift (default 15% of inference water).",
+                        "Defaults are public-proxy estimates, deliberately on the generous side — see Sources.",
                         "Everything stays on your machine.",
                     ], id: \.self) { line in
                         HStack(alignment: .top, spacing: 6) {
@@ -536,38 +618,10 @@ private struct EnergyRow: View {
                 }
                 Spacer(minLength: 0)
             }
-            Text(String(format: "default %.2f / %.2f Wh per 1k", def.out, def.prefill))
+            Text(state.isRecognizedFamily(model)
+                 ? String(format: "default %.2f / %.2f Wh per 1k", def.out, def.prefill)
+                 : String(format: "default %.2f / %.2f Wh per 1k · unrecognised family, generic mid-size defaults", def.out, def.prefill))
                 .font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct TrainingRow: View {
-    @ObservedObject var state: AppState
-    let model: String
-
-    var body: some View {
-        let binding = Binding(
-            get: { state.trainingLiters(for: model) / 1_000_000 },
-            set: { state.setTrainingLiters($0 * 1_000_000, for: model) }
-        )
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(AppState.prettyModel(model)).font(.callout)
-                Text(String(format: "default %.0f", state.defaultTrainingLiters(for: model) / 1_000_000))
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 4)
-            TextField("", value: binding, format: .number.precision(.fractionLength(0...1)))
-                .frame(width: 72)
-                .multilineTextAlignment(.trailing)
-                .textFieldStyle(.roundedBorder)
-            Text("M L").font(.caption).foregroundStyle(.secondary)
-            Button { state.resetTrainingLiters(for: model) } label: {
-                Image(systemName: "arrow.uturn.backward")
-            }
-            .buttonStyle(.plain).foregroundStyle(.secondary)
-            .help("Reset to default")
         }
     }
 }
@@ -599,46 +653,70 @@ private struct ShareCardView: View {
     let tokensText: String
     let headline: String
 
+    private let ink = Color(red: 0.05, green: 0.07, blue: 0.12)
+    private let accent = Color(red: 0.25, green: 0.56, blue: 1.0)
+
+    private func label(_ s: String) -> some View {
+        Text(s)
+            .font(.system(size: 11, weight: .semibold))
+            .tracking(1.4)
+            .foregroundStyle(.white.opacity(0.55))
+    }
+
     var body: some View {
         ZStack {
-            LinearGradient(colors: [.blue, .cyan],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
-            VStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "drop.fill")
-                    Text("My Claude Code water — \(windowTitle)")
-                        .fontWeight(.semibold)
-                }
-                .font(.title3)
-                .foregroundStyle(.white.opacity(0.95))
-
-                Text(mlText)
-                    .font(.system(size: 72, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-
-                Text("from \(tokensText) tokens")
-                    .font(.headline)
-                    .foregroundStyle(.white.opacity(0.85))
-
-                Text(headline)
-                    .font(.title2)
-                    .foregroundStyle(.white.opacity(0.95))
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 6) {
-                    Image(systemName: "drop.fill")
+            ink
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    HStack(spacing: 9) {
+                        Image(systemName: "drop.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 30, height: 30)
+                            .background(accent, in: RoundedRectangle(cornerRadius: 8))
+                        Text("WaterMark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    Spacer()
                     Text("github.com/FilipCondac/watermark")
-                        .fontWeight(.medium)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
                 }
-                .font(.callout)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(.white.opacity(0.18), in: Capsule())
+
+                Spacer()
+
+                label("CLAUDE CODE WATER FOOTPRINT · \(windowTitle.uppercased())")
+                Text(mlText)
+                    .font(.system(size: 76, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.top, 2)
+
+                Spacer()
+
+                Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
+
+                HStack(alignment: .bottom, spacing: 36) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        label("TOKENS")
+                        Text(tokensText)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        label("IN PERSPECTIVE")
+                        Text(headline)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 16)
             }
-            .padding(.vertical, 34)
-            .padding(.horizontal, 40)
+            .padding(30)
         }
         .frame(width: 600, height: 340)
     }
