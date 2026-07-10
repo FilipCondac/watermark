@@ -7,8 +7,9 @@ struct TokenTotals {
     var cacheCreation = 0
     var cacheRead = 0
 
-    /// Tokens that represent fresh compute (what the water estimate is based on).
-    /// Cache *reads* are excluded: they are cheap retrieval, not recomputation.
+    /// Tokens that represent fresh compute — the headline token count. Cache
+    /// *reads* are excluded here but still enter the energy model at a
+    /// discounted rate (see WaterModel.cacheReadFactor).
     var effective: Int { input + output + cacheCreation }
 
     /// Tokens processed during prefill (reading the prompt) — far cheaper per
@@ -121,7 +122,11 @@ final class UsageScanner {
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8) else { return agg }
 
-        var seenIDs = Set<String>()  // dedupe streamed/repeated assistant messages
+        // A streamed response writes the same message id on several lines, and
+        // the early lines carry a *partial* output_tokens count (often 1) while
+        // later lines have the final figure. So dedupe by id keeping the line
+        // with the highest output count, rather than the first seen.
+        var byID: [String: (day: String, model: String, t: TokenTotals)] = [:]
 
         text.enumerateLines { line, _ in
             guard !line.isEmpty,
@@ -134,11 +139,6 @@ final class UsageScanner {
             let model = (message["model"] as? String) ?? "unknown"
             if model == "<synthetic>" { return }
 
-            if let id = message["id"] as? String {
-                if seenIDs.contains(id) { return }
-                seenIDs.insert(id)
-            }
-
             var t = TokenTotals()
             t.input = (usage["input_tokens"] as? Int) ?? 0
             t.output = (usage["output_tokens"] as? Int) ?? 0
@@ -146,7 +146,17 @@ final class UsageScanner {
             t.cacheRead = (usage["cache_read_input_tokens"] as? Int) ?? 0
 
             let day = Self.localDay(fromISO: obj["timestamp"] as? String)
-            agg.add(day: day, model: model, t)
+
+            guard let id = message["id"] as? String else {
+                agg.add(day: day, model: model, t)  // no id: count as-is
+                return
+            }
+            if let existing = byID[id], existing.t.output >= t.output { return }
+            byID[id] = (day, model, t)
+        }
+
+        for (_, e) in byID {
+            agg.add(day: e.day, model: e.model, e.t)
         }
 
         return agg
