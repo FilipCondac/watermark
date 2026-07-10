@@ -54,6 +54,50 @@ and the number still comes out small, that tells you something.
 - **Sources and settings.** In-app citations, a plain-English methodology, and
   every coefficient laid out and editable, so the estimate stays auditable.
 
+## Install
+
+### Homebrew (recommended)
+
+```bash
+brew install --cask filipcondac/tap/watermark
+```
+
+That's it. The app lands in `/Applications`, and the cask clears the quarantine
+flag on install, so it opens with no Gatekeeper warning. Launch it from
+Spotlight or Applications, then turn on *Launch at login* from Settings.
+
+**No admin rights?** If you're not an administrator (say, a managed Mac),
+installing to `/Applications` will ask for a password. Install into your home
+folder instead and no password is needed:
+
+```bash
+HOMEBREW_CASK_OPTS="--appdir=~/Applications" brew install --cask filipcondac/tap/watermark
+```
+
+### Manual download
+
+Grab `WaterMark.zip` from the [latest release](https://github.com/FilipCondac/watermark/releases/latest),
+unzip it, and drag `WaterMark.app` to your Applications folder (`~/Applications`
+works without admin rights).
+
+Because the app isn't notarized (there's no paid Apple Developer account),
+macOS blocks the **first** launch. Clear it once, either way:
+
+- **No Terminal:** double-click the app, dismiss the warning, then open
+  **System Settings → Privacy & Security**, scroll down, and click
+  **"Open Anyway"** next to WaterMark. (On macOS 15 and later, the old
+  right-click → Open trick no longer bypasses this.)
+- **Terminal:** clear the quarantine flag directly.
+
+  ```bash
+  xattr -dr com.apple.quarantine ~/Applications/WaterMark.app
+  open ~/Applications/WaterMark.app
+  ```
+
+> The app **is** code-signed (ad-hoc), so it runs fine on Apple Silicon. These
+> steps only clear the one-time "unidentified developer" prompt that
+> un-notarized apps trigger. The `brew install` route avoids it entirely.
+
 ## How it works
 
 - Reads `~/.claude/projects/**/*.jsonl`, the transcripts Claude Code already
@@ -102,50 +146,6 @@ no per-token energy or water for Claude, and the biggest unknown is which
 region and grid served your requests. See *Sources* in the app for the full
 methodology and citations.
 
-## Install
-
-### Homebrew (recommended)
-
-```bash
-brew install --cask filipcondac/tap/watermark
-```
-
-That's it. The app lands in `/Applications`, and the cask clears the quarantine
-flag on install, so it opens with no Gatekeeper warning. Launch it from
-Spotlight or Applications, then turn on *Launch at login* from Settings.
-
-**No admin rights?** If you're not an administrator (say, a managed Mac),
-installing to `/Applications` will ask for a password. Install into your home
-folder instead and no password is needed:
-
-```bash
-HOMEBREW_CASK_OPTS="--appdir=~/Applications" brew install --cask filipcondac/tap/watermark
-```
-
-### Manual download
-
-Grab `WaterMark.zip` from the [latest release](https://github.com/FilipCondac/watermark/releases/latest),
-unzip it, and drag `WaterMark.app` to your Applications folder (`~/Applications`
-works without admin rights).
-
-Because the app isn't notarized (there's no paid Apple Developer account),
-macOS blocks the **first** launch. Clear it once, either way:
-
-- **No Terminal:** double-click the app, dismiss the warning, then open
-  **System Settings → Privacy & Security**, scroll down, and click
-  **"Open Anyway"** next to WaterMark. (On macOS 15 and later, the old
-  right-click → Open trick no longer bypasses this.)
-- **Terminal:** clear the quarantine flag directly.
-
-  ```bash
-  xattr -dr com.apple.quarantine ~/Applications/WaterMark.app
-  open ~/Applications/WaterMark.app
-  ```
-
-> The app **is** code-signed (ad-hoc), so it runs fine on Apple Silicon. These
-> steps only clear the one-time "unidentified developer" prompt that
-> un-notarized apps trigger. The `brew install` route avoids it entirely.
-
 ## Build from source
 
 ```bash
@@ -168,5 +168,3 @@ Requires macOS 13 or later and a Swift toolchain (Xcode command-line tools).
 | `Sources/WaterMark/Views.swift` | SwiftUI dashboard, sources, settings, and share card |
 | `Info.plist` | Bundle metadata (`LSUIElement` = menu-bar only) |
 | `build_app.sh` | Build script |
-</content>
-</invoke>
